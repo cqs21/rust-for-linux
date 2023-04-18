@@ -33,6 +33,7 @@
 #include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/sysctl.h>
+#include <linux/timer.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
 

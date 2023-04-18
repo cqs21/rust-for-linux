@@ -73,6 +73,7 @@ pub mod power;
 pub mod revocable;
 pub mod security;
 pub mod task;
+pub mod timer;
 pub mod workqueue;
 
 pub mod linked_list;
