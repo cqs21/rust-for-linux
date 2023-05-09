@@ -10,6 +10,10 @@
 #include <linux/refcount.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
+#include <linux/scatterlist.h>
+#include <linux/crypto.h>
+#include <crypto/aead.h>
+#include <crypto/skcipher.h>
 
 /* `bindgen` gets confused at certain things. */
 const gfp_t BINDINGS_GFP_KERNEL = GFP_KERNEL;

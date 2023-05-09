@@ -26,6 +26,9 @@
 #include <linux/spinlock.h>
 #include <linux/sched/signal.h>
 #include <linux/wait.h>
+#include <linux/scatterlist.h>
+#include <crypto/aead.h>
+#include <crypto/skcipher.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -127,6 +130,27 @@ void rust_helper_put_task_struct(struct task_struct *t)
 	put_task_struct(t);
 }
 EXPORT_SYMBOL_GPL(rust_helper_put_task_struct);
+
+void rust_helper_sg_set_buf(struct scatterlist *sg, const void *buf,
+							unsigned int buflen)
+{
+	sg_set_buf(sg, buf, buflen);
+}
+EXPORT_SYMBOL_GPL(rust_helper_sg_set_buf);
+
+struct aead_request *rust_helper_aead_request_alloc(struct crypto_aead *tfm,
+													gfp_t gfp)
+{
+	return aead_request_alloc(tfm, gfp);
+}
+EXPORT_SYMBOL_GPL(rust_helper_aead_request_alloc);
+
+struct skcipher_request *rust_helper_skcipher_request_alloc(
+							struct crypto_skcipher *tfm, gfp_t gfp)
+{
+	return skcipher_request_alloc(tfm, gfp);
+}
+EXPORT_SYMBOL_GPL(rust_helper_skcipher_request_alloc);
 
 /*
  * We use `bindgen`'s `--size_t-is-usize` option to bind the C `size_t` type
