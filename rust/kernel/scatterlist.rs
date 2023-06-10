@@ -290,4 +290,62 @@ impl ScatterList<'_> {
         // SAFETY: By the type invariant, we know that `self.opaque` is valid.
         unsafe { bindings::sg_nents(self.opaque.get()) as _ }
     }
+
+    /// Get an iterator for immutable references.
+    pub fn iter(&self) -> Iter<'_> {
+        // SAFETY: By the type invariant, we know that `self.opaque` is valid.
+        unsafe { Iter(ScatterList::as_ref(self.opaque.get())) }
+    }
+
+    /// Get an iterator for mutable references.
+    pub fn iter_mut(&mut self) -> IterMut<'_> {
+        // SAFETY: By the type invariant, we know that `self.opaque` is valid.
+        unsafe { IterMut(ScatterList::as_mut(self.opaque.get())) }
+    }
+}
+
+/// An iterator that yields [`Pin<&ScatterList>`].
+///
+/// Only iterate normal scatterlist entries, chainable entry will be skipped.
+pub struct Iter<'a>(Option<Pin<&'a ScatterList<'a>>>);
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = Pin<&'a ScatterList<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ptr = match &self.0 {
+            None => return None,
+            Some(sgl) => sgl.opaque.get(),
+        };
+        // SAFETY: `ptr` is from `self.opaque`, it is valid by the type invariant.
+        // And `next` is null, or the next valid scatterlist entry.
+        unsafe {
+            let next = bindings::sg_next(ptr);
+            self.0 = ScatterList::as_ref(next);
+            ScatterList::as_ref(ptr)
+        }
+    }
+}
+
+/// An iterator that yields [`Pin<&mut ScatterList>`].
+///
+/// Only iterate normal scatterlist entries, chainable entry will be skipped.
+pub struct IterMut<'a>(Option<Pin<&'a mut ScatterList<'a>>>);
+
+impl<'a> Iterator for IterMut<'a> {
+    type Item = Pin<&'a mut ScatterList<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ptr = match &self.0 {
+            None => return None,
+            Some(sgl) => sgl.opaque.get(),
+        };
+        // SAFETY: `ptr` is from `self.opaque`, it is valid by the type invariant.
+        // And `next` is null, or the next valid scatterlist entry.
+        unsafe {
+            let next = bindings::sg_next(ptr);
+            self.0 = ScatterList::as_mut(next);
+            ScatterList::as_mut(ptr)
+        }
+    }
 }
