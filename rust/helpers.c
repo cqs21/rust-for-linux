@@ -26,6 +26,7 @@
 #include <linux/spinlock.h>
 #include <linux/sched/signal.h>
 #include <linux/wait.h>
+#include <linux/scatterlist.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -127,6 +128,19 @@ void rust_helper_put_task_struct(struct task_struct *t)
 	put_task_struct(t);
 }
 EXPORT_SYMBOL_GPL(rust_helper_put_task_struct);
+
+void rust_helper_sg_set_buf(struct scatterlist *sgl, const void *buf,
+			    unsigned int buflen)
+{
+	sg_set_buf(sgl, buf, buflen);
+}
+EXPORT_SYMBOL_GPL(rust_helper_sg_set_buf);
+
+void *rust_helper_sg_virt(struct scatterlist *sgl)
+{
+	return sg_virt(sgl);
+}
+EXPORT_SYMBOL_GPL(rust_helper_sg_virt);
 
 /*
  * We use `bindgen`'s `--size_t-is-usize` option to bind the C `size_t` type
