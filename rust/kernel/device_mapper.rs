@@ -118,6 +118,24 @@ pub trait TargetOperations: Sized {
     fn report_zones(t: &mut Target<Self>, args: &mut [ReportZonesArgs]) -> Result {
         unimplemented!()
     }
+
+    /// Pass on ioctl to the underlying device.
+    #[allow(unused)]
+    fn prepare_ioctl(t: &mut Target<Self>) -> (i32, Option<NonNull<TargetDevice<Self>>>) {
+        unimplemented!()
+    }
+
+    /// Iterate the underlying devices.
+    #[allow(unused)]
+    fn iterate_devices(t: &mut Target<Self>) -> Result<Box<dyn Iterator<Item = IterDevice<Self>>>> {
+        unimplemented!()
+    }
+
+    /// Setup target request queue limits.
+    #[allow(unused)]
+    fn io_hints(t: &mut Target<Self>, limits: &mut QueueLimits) {
+        unimplemented!()
+    }
 }
 
 /// Wrap the kernel struct `target_type`.
@@ -193,6 +211,9 @@ impl TargetType {
                     (HAS_STATUS, status, dm_status_fn),
                     (HAS_MESSAGE, message, dm_message_fn),
                     (HAS_REPORT_ZONES, report_zones, dm_report_zones_fn),
+                    (HAS_PREPARE_IOCTL, prepare_ioctl, dm_prepare_ioctl_fn),
+                    (HAS_ITERATE_DEVICES, iterate_devices, dm_iterate_devices_fn),
+                    (HAS_IO_HINTS, io_hints, dm_io_hints_fn),
                 );
 
                 to_result(bindings::dm_register_target(tt))
@@ -411,6 +432,68 @@ impl TargetType {
         };
         T::report_zones(t, args).map_or_else(|e| e.to_errno(), |_| 0)
     }
+    unsafe extern "C" fn dm_prepare_ioctl_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+        bdev: *mut *mut bindings::block_device,
+    ) -> core::ffi::c_int {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+
+        match T::prepare_ioctl(t) {
+            (err, None) => err,
+            // SAFETY: `td` and `dev` is `NonNull`, both of them are valid.
+            (ret, Some(td)) => unsafe {
+                let dm_dev = td.as_ref().dev.as_ptr();
+                let block_dev = (*dm_dev).bdev;
+                *bdev = block_dev;
+                ret
+            },
+        }
+    }
+    unsafe extern "C" fn dm_iterate_devices_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+        fn_: bindings::iterate_devices_callout_fn,
+        data: *mut core::ffi::c_void,
+    ) -> core::ffi::c_int {
+        let Some(fn_) = fn_ else {
+            pr_warn!("Invalid iterate_devices_callout_fn, skipped!");
+            return 0;
+        };
+
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        let devices = match T::iterate_devices(t) {
+            Err(e) => return e.to_errno(),
+            Ok(devices) => devices,
+        };
+
+        let mut ret = 0;
+        for (target_device, start, len) in devices {
+            // SAFETY: `target_device` is `NonNull`, it is also valid.
+            // `fn_` is checked above, it is non-null, and the kernel
+            // should pass valid `iterate_devices_callout_fn`.
+            unsafe {
+                let dev = target_device.as_ref().dev.as_ptr();
+                ret = fn_(ti, dev, start as _, len as _, data);
+                if ret != 0 {
+                    break;
+                }
+            }
+        }
+        ret
+    }
+    unsafe extern "C" fn dm_io_hints_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+        limits: *mut bindings::queue_limits,
+    ) {
+        // SAFETY: the kernel should pass valid `dm_target` and `queue_limits`
+        // pointers.
+        unsafe {
+            let t = Target::borrow_mut(ti);
+            let limits = QueueLimits::borrow_mut(limits);
+            T::io_hints(t, limits);
+        }
+    }
 }
 
 /// Wrap the kernel struct `dm_target`.
@@ -548,6 +631,12 @@ impl<T: TargetOperations> Drop for TargetDevice<T> {
         unsafe { bindings::dm_put_device(self.ti.as_ptr(), self.dev.as_ptr()) }
     }
 }
+
+/// Gather info about underlying device of target.
+///
+/// The first is the [`TargetDevice`], the second is the start sector of
+/// the device, and the third is the length (in sectors) of the device.
+pub type IterDevice<T> = (NonNull<TargetDevice<T>>, usize, usize);
 
 /// The return values of target map function, i.e., [`TargetOperations::map`].
 #[repr(u32)]
@@ -800,5 +889,17 @@ impl From<u32> for BlkStatus {
             17 => Self::Offline,
             _ => Self::Undefined,
         }
+    }
+}
+
+/// Wrap the kernel struct `queue_limits`.
+///
+/// Dummy.
+pub struct QueueLimits(Opaque<bindings::queue_limits>);
+
+impl QueueLimits {
+    unsafe fn borrow_mut<'a>(ptr: *mut bindings::queue_limits) -> &'a mut Self {
+        // SAFETY: the caller should pass a valid `ptr`.
+        unsafe { &mut *(ptr as *mut Self) }
     }
 }
