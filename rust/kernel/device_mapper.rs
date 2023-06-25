@@ -10,7 +10,7 @@ use core::ptr::{addr_of, NonNull};
 
 use crate::error::to_result;
 use crate::prelude::*;
-use crate::str::CStr;
+use crate::str::{CStr, CString};
 use crate::types::Opaque;
 
 /// Declare operations that a device mapper target can do.
@@ -100,6 +100,24 @@ pub trait TargetOperations: Sized {
     fn busy(t: &mut Target<Self>) -> bool {
         unimplemented!()
     }
+
+    /// Return the target status.
+    #[allow(unused)]
+    fn status(t: &mut Target<Self>, type_: StatusType, flags: StatusFlags) -> Option<CString> {
+        unimplemented!()
+    }
+
+    /// Handle messages to the target.
+    #[allow(unused)]
+    fn message(t: &mut Target<Self>, args: Args) -> Result<CString> {
+        unimplemented!()
+    }
+
+    /// Propagate report zones command to underlying devices.
+    #[allow(unused)]
+    fn report_zones(t: &mut Target<Self>, args: &mut [ReportZonesArgs]) -> Result {
+        unimplemented!()
+    }
 }
 
 /// Wrap the kernel struct `target_type`.
@@ -172,6 +190,9 @@ impl TargetType {
                     (HAS_PRERESUME, preresume, dm_preresume_fn),
                     (HAS_RESUME, resume, dm_resume_fn),
                     (HAS_BUSY, busy, dm_busy_fn),
+                    (HAS_STATUS, status, dm_status_fn),
+                    (HAS_MESSAGE, message, dm_message_fn),
+                    (HAS_REPORT_ZONES, report_zones, dm_report_zones_fn),
                 );
 
                 to_result(bindings::dm_register_target(tt))
@@ -326,6 +347,69 @@ impl TargetType {
         // SAFETY: the kernel should pass valid `dm_target` pointer.
         let t = unsafe { Target::borrow_mut(ti) };
         T::busy(t) as _
+    }
+    unsafe extern "C" fn dm_status_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+        status_type: bindings::status_type_t,
+        status_flags: core::ffi::c_uint,
+        result: *mut core::ffi::c_char,
+        maxlen: core::ffi::c_uint,
+    ) {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        if let Some(s) = T::status(t, status_type.into(), status_flags.into()) {
+            let count = s.len_with_nul().min(maxlen as _);
+            // SAFETY: the kernel should pass valid `result` pointer, and
+            // `count` is not greater than `maxlen`.
+            unsafe {
+                core::ptr::copy(s.as_char_ptr(), result, count);
+            }
+        }
+    }
+    unsafe extern "C" fn dm_message_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+        argc: core::ffi::c_uint,
+        argv: *mut *mut core::ffi::c_char,
+        result: *mut core::ffi::c_char,
+        maxlen: core::ffi::c_uint,
+    ) -> core::ffi::c_int {
+        // SAFETY: the kernel splits arguments by `dm_split_args`, then pass
+        // suitable `argc` and `argv` to `dm_ctr_fn`. If `argc` is not zero,
+        // `argv` is non-null and valid.
+        let args = unsafe { Args::new(argc, argv) };
+
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::message(t, args).map_or_else(
+            |e| e.to_errno(),
+            // SAFETY: the kernel should pass valid `result` pointer, and
+            // `count` is not greater than `maxlen`.
+            |ret| unsafe {
+                let count = ret.len_with_nul().min(maxlen as _);
+                core::ptr::copy(ret.as_char_ptr(), result, count);
+                0
+            },
+        )
+    }
+    unsafe extern "C" fn dm_report_zones_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+        args: *mut bindings::dm_report_zones_args,
+        nr_zones: core::ffi::c_uint,
+    ) -> core::ffi::c_int {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+
+        let args = if nr_zones > 0 {
+            // SAFETY: the kernel should pass valid `args`, if `nr_zones`
+            // is not zero.
+            unsafe {
+                let first = ReportZonesArgs::borrow_mut(args);
+                core::slice::from_raw_parts_mut(first as _, nr_zones as _)
+            }
+        } else {
+            &mut []
+        };
+        T::report_zones(t, args).map_or_else(|e| e.to_errno(), |_| 0)
     }
 }
 
@@ -508,6 +592,69 @@ impl MapInfo {
     unsafe fn borrow_mut<'a>(ptr: *mut bindings::map_info) -> &'a mut Self {
         // SAFETY: the caller should pass a valid `ptr`.
         unsafe { &mut *(ptr as *mut Self) }
+    }
+}
+
+/// Define target status types.
+#[repr(u32)]
+pub enum StatusType {
+    /// Request for some general info.
+    Info,
+
+    /// Request for more detailed info.
+    Table,
+
+    /// Request for some integrity info.
+    Ima,
+
+    /// Undefined.
+    Undefined,
+}
+
+impl From<u32> for StatusType {
+    fn from(value: u32) -> Self {
+        match value {
+            bindings::status_type_t_STATUSTYPE_INFO => Self::Info,
+            bindings::status_type_t_STATUSTYPE_TABLE => Self::Table,
+            bindings::status_type_t_STATUSTYPE_IMA => Self::Ima,
+            _ => Self::Undefined,
+        }
+    }
+}
+
+/// Define target status flags.
+#[repr(u32)]
+pub enum StatusFlags {
+    /// See `DM_STATUS_NOFLUSH_FLAG`.
+    NoFlush = 1 << 0,
+
+    /// Undefined.
+    Undefined,
+}
+
+impl From<u32> for StatusFlags {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self::NoFlush,
+            _ => Self::Undefined,
+        }
+    }
+}
+
+/// Wrap the kernel struct `dm_report_zones_args`.
+pub struct ReportZonesArgs(Opaque<bindings::dm_report_zones_args>);
+
+impl ReportZonesArgs {
+    unsafe fn borrow_mut<'a>(ptr: *mut bindings::dm_report_zones_args) -> &'a mut Self {
+        // SAFETY: the caller should pass a valid `ptr`.
+        unsafe { &mut *(ptr as *mut Self) }
+    }
+
+    /// Return the next sector.
+    pub fn next_sector(&self) -> usize {
+        // SAFETY: `self.0` is borrowed form foreign pointer,
+        // should be valid.
+        unsafe { (*self.0.get()).next_sector as _ }
     }
 }
 
