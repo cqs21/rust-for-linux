@@ -64,6 +64,42 @@ pub trait TargetOperations: Sized {
     ) -> EndState {
         unimplemented!()
     }
+
+    /// Hook presuspend.
+    #[allow(unused)]
+    fn presuspend(t: &mut Target<Self>) {
+        unimplemented!()
+    }
+
+    /// Hook presuspend_undo.
+    #[allow(unused)]
+    fn presuspend_undo(t: &mut Target<Self>) {
+        unimplemented!()
+    }
+
+    /// Hook postsuspend.
+    #[allow(unused)]
+    fn postsuspend(t: &mut Target<Self>) {
+        unimplemented!()
+    }
+
+    /// Hook preresume.
+    #[allow(unused)]
+    fn preresume(t: &mut Target<Self>) -> Result {
+        unimplemented!()
+    }
+
+    /// Hook resume.
+    #[allow(unused)]
+    fn resume(t: &mut Target<Self>) {
+        unimplemented!()
+    }
+
+    /// Check if target is busy.
+    #[allow(unused)]
+    fn busy(t: &mut Target<Self>) -> bool {
+        unimplemented!()
+    }
 }
 
 /// Wrap the kernel struct `target_type`.
@@ -130,6 +166,12 @@ impl TargetType {
                     ),
                     (HAS_END_IO, end_io, dm_endio_fn),
                     (HAS_RQ_END_IO, rq_end_io, dm_request_endio_fn),
+                    (HAS_PRESUSPEND, presuspend, dm_presuspend_fn),
+                    (HAS_PRESUSPEND_UNDO, presuspend_undo, dm_presuspend_undo_fn),
+                    (HAS_POSTSUSPEND, postsuspend, dm_postsuspend_fn),
+                    (HAS_PRERESUME, preresume, dm_preresume_fn),
+                    (HAS_RESUME, resume, dm_resume_fn),
+                    (HAS_BUSY, busy, dm_busy_fn),
                 );
 
                 to_result(bindings::dm_register_target(tt))
@@ -250,6 +292,40 @@ impl TargetType {
             let map_ctx = MapInfo::borrow_mut(map_context);
             T::rq_end_io(t, rq, map_ctx, (error as u32).into()) as _
         }
+    }
+    unsafe extern "C" fn dm_presuspend_fn<T: TargetOperations>(ti: *mut bindings::dm_target) {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::presuspend(t);
+    }
+    unsafe extern "C" fn dm_presuspend_undo_fn<T: TargetOperations>(ti: *mut bindings::dm_target) {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::presuspend_undo(t);
+    }
+    unsafe extern "C" fn dm_postsuspend_fn<T: TargetOperations>(ti: *mut bindings::dm_target) {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::postsuspend(t);
+    }
+    unsafe extern "C" fn dm_preresume_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+    ) -> core::ffi::c_int {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::preresume(t).map_or_else(|e| e.to_errno(), |_| 0)
+    }
+    unsafe extern "C" fn dm_resume_fn<T: TargetOperations>(ti: *mut bindings::dm_target) {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::resume(t);
+    }
+    unsafe extern "C" fn dm_busy_fn<T: TargetOperations>(
+        ti: *mut bindings::dm_target,
+    ) -> core::ffi::c_int {
+        // SAFETY: the kernel should pass valid `dm_target` pointer.
+        let t = unsafe { Target::borrow_mut(ti) };
+        T::busy(t) as _
     }
 }
 
