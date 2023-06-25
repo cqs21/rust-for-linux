@@ -671,6 +671,124 @@ impl<T: TargetOperations> Target<T> {
             }
         }
     }
+
+    /// Return maximum size (in sectors) of I/O submitted to the target.
+    pub fn max_io_len(&self) -> usize {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { (*self.opaque.get()).max_io_len as _ }
+    }
+
+    /// Set maximum size (in sectors) of I/O submitted to the target.
+    pub fn set_max_io_len(&mut self, len: usize) -> Result {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            to_result(bindings::dm_set_target_max_io_len(
+                self.opaque.get(),
+                len as _,
+            ))
+        }
+    }
+
+    /// Return the number of zero-length barrier bios that will be submitted
+    /// to the target for the purpose of flushing cache.
+    pub fn num_flush_bios(&self) -> usize {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { (*self.opaque.get()).num_flush_bios as _ }
+    }
+
+    /// Set the number of zero-length barrier bios that will be submitted
+    /// to the target for the purpose of flushing cache.
+    pub fn set_num_flush_bios(&mut self, num: usize) {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            (*self.opaque.get()).num_flush_bios = num as _;
+        }
+    }
+
+    /// Return the number of discard bios.
+    pub fn num_discard_bios(&self) -> usize {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { (*self.opaque.get()).num_discard_bios as _ }
+    }
+
+    /// Set the number of discard bios.
+    pub fn set_num_discard_bios(&mut self, num: usize) {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            (*self.opaque.get()).num_discard_bios = num as _;
+        }
+    }
+
+    /// Return the number of secure erase bios.
+    pub fn num_secure_erase_bios(&self) -> usize {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { (*self.opaque.get()).num_secure_erase_bios as _ }
+    }
+
+    /// Set the number of secure erase bios.
+    pub fn set_num_secure_erase_bios(&mut self, num: usize) {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            (*self.opaque.get()).num_secure_erase_bios = num as _;
+        }
+    }
+
+    /// Return the number of WRITE ZEROES bios.
+    pub fn num_write_zeroes_bios(&self) -> usize {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { (*self.opaque.get()).num_write_zeroes_bios as _ }
+    }
+
+    /// Set the number of WRITE ZEROES bios.
+    pub fn set_num_write_zeroes_bios(&mut self, num: usize) {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            (*self.opaque.get()).num_write_zeroes_bios = num as _;
+        }
+    }
+
+    /// Return the minimum number of extra bytes allocated in each io
+    /// for the target to use.
+    pub fn per_io_data_size(&self) -> usize {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { (*self.opaque.get()).per_io_data_size as _ }
+    }
+
+    /// Set the minimum number of extra bytes allocated in each io
+    /// for the target to use.
+    pub fn set_per_io_data_size(&mut self, size: usize) {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            (*self.opaque.get()).per_io_data_size = size as _;
+        }
+    }
+
+    /// Set an error string for the target, could be used
+    /// by [`TargetOperations::ctr`].
+    pub fn set_error(&mut self, err: &CStr) {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe {
+            (*self.opaque.get()).error = err.as_char_ptr() as _;
+        }
+    }
+
+    /// Check if the target is suspended.
+    pub fn suspended(&self) -> bool {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { bindings::dm_suspended(self.opaque.get()) != 0 }
+    }
+
+    /// Check if the target is post_suspending.
+    pub fn post_suspending(&self) -> bool {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { bindings::dm_post_suspending(self.opaque.get()) != 0 }
+    }
+
+    /// Check if the target is noflush_suspending.
+    pub fn noflush_suspending(&self) -> bool {
+        // SAFETY: `self.opaque` is borrowed from foreign pointer, should be valid.
+        unsafe { bindings::dm_noflush_suspending(self.opaque.get()) != 0 }
+    }
 }
 
 /// Represent an underlying device of a device mapper target.
@@ -720,6 +838,100 @@ impl<T: TargetOperations> TargetDevice<T> {
     pub fn device_sectors(&self) -> usize {
         // SAFETY: the `from_raw` caller should pass valid `dev` pointer.
         unsafe { (*(*self.dev.as_ptr()).bdev).bd_nr_sectors as _ }
+    }
+
+    /// Return [NonNull<TargetDevice>].
+    pub fn as_ptr(&mut self) -> NonNull<Self> {
+        // SAFETY: `self` is non-null and valid.
+        unsafe { NonNull::new_unchecked(self as *mut Self) }
+    }
+
+    /// Propagate report zones command to underlying devices.
+    #[cfg(CONFIG_BLK_DEV_ZONED)]
+    pub fn report_zones(
+        &self,
+        start: usize,
+        sector: usize,
+        args: &mut [ReportZonesArgs],
+    ) -> Result {
+        // SAFETY: the `from_raw` caller should pass valid `dev` pointer.
+        unsafe {
+            let bdev = (*self.dev.as_ptr()).bdev;
+            let ptr = args.as_mut_ptr() as *mut bindings::dm_report_zones_args;
+            to_result(bindings::dm_report_zones(
+                bdev,
+                start as _,
+                sector as _,
+                ptr,
+                args.len() as _,
+            ))
+        }
+    }
+
+    /// Translate a device-relative logical-page-offset into an
+    /// absolute physical pfn.
+    ///
+    /// Return the `addr` and the `pages` available for `DAX` at
+    /// that pfn, if success.
+    #[cfg(CONFIG_FS_DAX)]
+    pub fn dax_direct_access(
+        &mut self,
+        pgoff: usize,
+        nr_pages: usize,
+        mode: DaxMode,
+    ) -> Result<(usize, Range<usize>)> {
+        let mut kaddr = core::ptr::null_mut();
+        let mut pfn = bindings::pfn_t::default();
+
+        // SAFETY: the `from_raw` caller should pass valid `dev` pointer.
+        let count = unsafe {
+            let dax_dev = (*self.dev.as_ptr()).dax_dev;
+            bindings::dax_direct_access(
+                dax_dev,
+                pgoff as _,
+                nr_pages as _,
+                mode as _,
+                &mut kaddr,
+                &mut pfn,
+            )
+        };
+
+        if count < 0 {
+            Err(Error::from_errno(count as _))
+        } else {
+            let pages = Range {
+                start: pfn.val as usize,
+                end: (pfn.val as usize) + (count as usize),
+            };
+            Ok((kaddr as _, pages))
+        }
+    }
+
+    /// Zero page range.
+    #[cfg(CONFIG_FS_DAX)]
+    pub fn dax_zero_page_range(&mut self, pgoff: usize, nr_pages: usize) -> Result {
+        // SAFETY: the `from_raw` caller should pass valid `dev` pointer.
+        unsafe {
+            let dax_dev = (*self.dev.as_ptr()).dax_dev;
+            to_result(bindings::dax_zero_page_range(dax_dev, pgoff as _, nr_pages))
+        }
+    }
+
+    /// Recover a poisoned range by DAX device driver capable of
+    /// clearing poison.
+    #[cfg(CONFIG_FS_DAX)]
+    pub fn dax_recovery_write(
+        &mut self,
+        iov_iter: Pin<&mut IovIter>,
+        pgoff: usize,
+        region: Range<usize>,
+    ) -> usize {
+        // SAFETY: the `from_raw` caller should pass `dev` pointer.
+        unsafe {
+            let dax_dev = (*self.dev.as_ptr()).dax_dev;
+            let i = iov_iter.opaque.get();
+            bindings::dax_recovery_write(dax_dev, pgoff as _, region.start as _, region.len(), i)
+        }
     }
 }
 
@@ -918,6 +1130,31 @@ impl Bio {
     /// Return `true` if the bio request is write.
     pub fn is_write(&self) -> bool {
         self.op_and_flags() & bindings::req_op_REQ_OP_WRITE != 0
+    }
+
+    /// Return the start sector of bio.
+    pub fn sector(&self) -> usize {
+        // SAFETY: the `from_raw` caller should pass valid `bio`, so
+        // `self.opaque` is valid too.
+        unsafe { (*self.opaque.get()).bi_iter.bi_sector as _ }
+    }
+
+    /// Set the start sector of bio.
+    pub fn set_sector(&mut self, sector: usize) {
+        // SAFETY: the `from_raw` caller should pass valid `bio`, so
+        // `self.opaque` is valid too.
+        unsafe {
+            (*self.opaque.get()).bi_iter.bi_sector = sector as _;
+        }
+    }
+
+    /// Set the block device of bio.
+    pub fn set_dev<T: TargetOperations>(&mut self, td: &TargetDevice<T>) {
+        // SAFETY: the `from_raw` caller should pass valid `bio`, so
+        // `self.opaque` is valid too.
+        unsafe {
+            bindings::bio_set_dev(self.opaque.get(), (*td.dev.as_ptr()).bdev);
+        }
     }
 }
 

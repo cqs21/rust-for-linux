@@ -27,6 +27,7 @@
 #include <linux/spinlock.h>
 #include <linux/sched/signal.h>
 #include <linux/wait.h>
+#include <linux/bio.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -134,6 +135,12 @@ void rust_helper_put_task_struct(struct task_struct *t)
 	put_task_struct(t);
 }
 EXPORT_SYMBOL_GPL(rust_helper_put_task_struct);
+
+void rust_helper_bio_set_dev(struct bio *bio, struct block_device *bdev)
+{
+	bio_set_dev(bio, bdev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_bio_set_dev);
 
 /*
  * We use `bindgen`'s `--size_t-is-usize` option to bind the C `size_t` type
