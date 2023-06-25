@@ -30,6 +30,16 @@ config SAMPLE_RUST_PRINT
 
 	  If unsure, say N.
 
+config SAMPLE_RUST_DM_LINEAR
+	tristate "Device mapper linear target"
+	help
+	  This option builds the Rust device mapper linear sample.
+
+	  To compile this as a module, choose M here:
+	  the module will be called rust_dm_linear.
+
+	  If unsure, say N.
+
 config SAMPLE_RUST_HOSTPROGS
 	bool "Host programs"
 	help
