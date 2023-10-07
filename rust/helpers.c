@@ -30,6 +30,7 @@
 #include <linux/sched/signal.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
+#include <linux/bio.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -143,6 +144,12 @@ struct kunit *rust_helper_kunit_get_current_test(void)
 	return kunit_get_current_test();
 }
 EXPORT_SYMBOL_GPL(rust_helper_kunit_get_current_test);
+
+void rust_helper_bio_set_dev(struct bio *bio, struct block_device *bdev)
+{
+	bio_set_dev(bio, bdev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_bio_set_dev);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can
