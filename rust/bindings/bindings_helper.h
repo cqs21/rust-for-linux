@@ -14,6 +14,7 @@
 #include <linux/sched.h>
 #include <linux/device-mapper.h>
 #include <linux/dax.h>
+#include <linux/scatterlist.h>
 
 /* `bindgen` gets confused at certain things. */
 const size_t BINDINGS_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;

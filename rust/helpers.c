@@ -31,6 +31,7 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/bio.h>
+#include <linux/scatterlist.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -150,6 +151,19 @@ void rust_helper_bio_set_dev(struct bio *bio, struct block_device *bdev)
 	bio_set_dev(bio, bdev);
 }
 EXPORT_SYMBOL_GPL(rust_helper_bio_set_dev);
+
+void rust_helper_sg_set_buf(struct scatterlist *sgl, const void *buf,
+			    unsigned int buflen)
+{
+	sg_set_buf(sgl, buf, buflen);
+}
+EXPORT_SYMBOL_GPL(rust_helper_sg_set_buf);
+
+void *rust_helper_sg_virt(struct scatterlist *sgl)
+{
+	return sg_virt(sgl);
+}
+EXPORT_SYMBOL_GPL(rust_helper_sg_virt);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can
