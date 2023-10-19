@@ -15,6 +15,9 @@
 #include <linux/device-mapper.h>
 #include <linux/dax.h>
 #include <linux/scatterlist.h>
+#include <linux/crypto.h>
+#include <crypto/aead.h>
+#include <crypto/skcipher.h>
 
 /* `bindgen` gets confused at certain things. */
 const size_t BINDINGS_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;

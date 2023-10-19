@@ -32,6 +32,8 @@
 #include <linux/wait.h>
 #include <linux/bio.h>
 #include <linux/scatterlist.h>
+#include <crypto/aead.h>
+#include <crypto/skcipher.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -164,6 +166,20 @@ void *rust_helper_sg_virt(struct scatterlist *sgl)
 	return sg_virt(sgl);
 }
 EXPORT_SYMBOL_GPL(rust_helper_sg_virt);
+
+struct aead_request *rust_helper_aead_request_alloc(struct crypto_aead *tfm,
+				gfp_t gfp)
+{
+	return aead_request_alloc(tfm, gfp);
+}
+EXPORT_SYMBOL_GPL(rust_helper_aead_request_alloc);
+
+struct skcipher_request *rust_helper_skcipher_request_alloc(
+				struct crypto_skcipher *tfm, gfp_t gfp)
+{
+	return skcipher_request_alloc(tfm, gfp);
+}
+EXPORT_SYMBOL_GPL(rust_helper_skcipher_request_alloc);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

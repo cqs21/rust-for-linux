@@ -18,6 +18,7 @@
 #![feature(new_uninit)]
 #![feature(receiver_trait)]
 #![feature(unsize)]
+#![feature(offset_of)]
 
 // Ensure conditional compilation based on the kernel configuration works;
 // otherwise we may silently break things like initcall handling.
@@ -31,6 +32,7 @@ extern crate self as kernel;
 #[cfg(not(testlib))]
 mod allocator;
 mod build_assert;
+pub mod crypto;
 pub mod device_mapper;
 pub mod error;
 pub mod init;
