@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use super::{Backend, Guard, Lock, LockClassKey};
 use crate::bindings;
 use crate::prelude::*;
-use super::{Backend, Lock, LockClassKey, Guard};
 
-use core::mem::transmute;
 use core::marker::PhantomData;
+use core::mem::transmute;
 
 #[macro_export]
 macro_rules! new_rwlock {
@@ -56,7 +56,7 @@ impl<T> RwLock<T> {
     }
 
     pub fn read(&self) -> Guard<'_, T, RwLockBackend<Read>> {
-        let inner: &Lock<T, RwLockBackend<Read>>  = unsafe { transmute(&self.inner) };
+        let inner: &Lock<T, RwLockBackend<Read>> = unsafe { transmute(&self.inner) };
         inner.lock()
     }
 
@@ -64,20 +64,18 @@ impl<T> RwLock<T> {
         let inner: &Lock<T, RwLockBackend<TryRead>> = unsafe { transmute(&self.inner) };
         let state = unsafe { RwLockBackend::<TryRead>::lock(inner.state.get()) };
         match state {
-            Some(val) if val == 1 => Ok(
-                unsafe { Guard::new(inner, state) }
-            ),
+            Some(val) if val == 1 => Ok(unsafe { Guard::new(inner, state) }),
             _ => Err(LockError::TryRead),
         }
     }
 
-    pub fn read_interruptible(&self) -> Result<Guard<'_, T, RwLockBackend<ReadInterruptible>>, LockError> {
+    pub fn read_interruptible(
+        &self,
+    ) -> Result<Guard<'_, T, RwLockBackend<ReadInterruptible>>, LockError> {
         let inner: &Lock<T, RwLockBackend<ReadInterruptible>> = unsafe { transmute(&self.inner) };
         let state = unsafe { RwLockBackend::<ReadInterruptible>::lock(inner.state.get()) };
         match state {
-            Some(val) if val == 0 => Ok(
-                unsafe { Guard::new(inner, state) }
-            ),
+            Some(val) if val == 0 => Ok(unsafe { Guard::new(inner, state) }),
             _ => Err(LockError::ReadInterruptible),
         }
     }
@@ -86,9 +84,7 @@ impl<T> RwLock<T> {
         let inner: &Lock<T, RwLockBackend<ReadKillable>> = unsafe { transmute(&self.inner) };
         let state = unsafe { RwLockBackend::<ReadKillable>::lock(inner.state.get()) };
         match state {
-            Some(val) if val == 0 => Ok(
-                unsafe { Guard::new(inner, state) }
-            ),
+            Some(val) if val == 0 => Ok(unsafe { Guard::new(inner, state) }),
             _ => Err(LockError::ReadKillable),
         }
     }
@@ -102,9 +98,7 @@ impl<T> RwLock<T> {
         let inner: &Lock<T, RwLockBackend<TryWrite>> = unsafe { transmute(&self.inner) };
         let state = unsafe { RwLockBackend::<TryWrite>::lock(inner.state.get()) };
         match state {
-            Some(val) if val == 1 => Ok(
-                unsafe { Guard::new(inner, state) }
-            ),
+            Some(val) if val == 1 => Ok(unsafe { Guard::new(inner, state) }),
             _ => Err(LockError::TryWrite),
         }
     }
@@ -113,14 +107,14 @@ impl<T> RwLock<T> {
         let inner: &Lock<T, RwLockBackend<WriteKillable>> = unsafe { transmute(&self.inner) };
         let state = unsafe { RwLockBackend::<WriteKillable>::lock(inner.state.get()) };
         match state {
-            Some(val) if val == 0 => Ok(
-                unsafe { Guard::new(inner, state) }
-            ),
+            Some(val) if val == 0 => Ok(unsafe { Guard::new(inner, state) }),
             _ => Err(LockError::WriteKillable),
         }
     }
 
-    pub fn downgrade<'a>(this: impl Into<Guard<'a, T, RwLockBackend<Write>>>) -> Guard<'a, T, RwLockBackend<Read>> {
+    pub fn downgrade<'a>(
+        this: impl Into<Guard<'a, T, RwLockBackend<Write>>>,
+    ) -> Guard<'a, T, RwLockBackend<Read>> {
         let guard: Guard<'a, T, RwLockBackend<Write>> = this.into();
         unsafe { bindings::downgrade_write(guard.lock.state.get()) };
         let guard: Guard<'a, T, RwLockBackend<Read>> = unsafe { transmute(guard) };

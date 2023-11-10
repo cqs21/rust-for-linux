@@ -99,7 +99,8 @@ impl<'a> ScatterList<'a> {
     /// The `ptr` is null, or pointed to a valid `scatterlist`.
     unsafe fn as_ref(ptr: *mut bindings::scatterlist) -> Option<Pin<&'a Self>> {
         // SAFETY: `sgl` is non-null and valid.
-        NonNull::new(ptr).map(|sgl| unsafe { Pin::new_unchecked(&*(sgl.as_ptr() as *const ScatterList<'_>)) })
+        NonNull::new(ptr)
+            .map(|sgl| unsafe { Pin::new_unchecked(&*(sgl.as_ptr() as *const ScatterList<'_>)) })
     }
 
     /// Obtain a pinned reference to a mutable scatterlist from a raw pointer.
@@ -109,7 +110,8 @@ impl<'a> ScatterList<'a> {
     /// The `ptr` is null, or pointed to a valid `scatterlist`.
     unsafe fn as_mut(ptr: *mut bindings::scatterlist) -> Option<Pin<&'a mut Self>> {
         // SAFETY: `sgl` is non-null and valid.
-        NonNull::new(ptr).map(|sgl| unsafe { Pin::new_unchecked(&mut *(sgl.as_ptr() as *mut ScatterList<'_>)) })
+        NonNull::new(ptr)
+            .map(|sgl| unsafe { Pin::new_unchecked(&mut *(sgl.as_ptr() as *mut ScatterList<'_>)) })
     }
 }
 
@@ -551,4 +553,3 @@ impl<'a, const N: usize> SgTable<'a, N> {
         unsafe { IterMut(ScatterList::as_mut(self.entries[0].opaque.get())) }
     }
 }
-

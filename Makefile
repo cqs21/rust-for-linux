@@ -4,6 +4,8 @@ PATCHLEVEL = 6
 SUBLEVEL = 0
 EXTRAVERSION = -rc4
 NAME = Hurr durr I'ma ninja sloth
+LLVM = 1
+export LOCALVERSION=-rust
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

@@ -30,7 +30,7 @@ use core::{
     mem::{ManuallyDrop, MaybeUninit},
     ops::{Deref, DerefMut},
     pin::Pin,
-    ptr::NonNull,
+    ptr::{NonNull, addr_of_mut},
 };
 use macros::pin_data;
 
@@ -130,10 +130,22 @@ pub struct Arc<T: ?Sized> {
     _p: PhantomData<ArcInner<T>>,
 }
 
+/// `Weak` is a version of [`Arc`] that holds a non-owning reference to the
+/// managed allocation. The allocation is accessed by calling [`upgrade`] on the `Weak`
+/// pointer, which returns an [`Option<Arc<T>>`].
+///
+/// The typical way to obtain a `Weak` pointer is to call [`Arc::downgrade`].
+///
+/// [`upgrade`]: Weak::upgrade
+pub struct Weak<T: ?Sized> {
+    ptr: NonNull<ArcInner<T>>,
+}
+
 #[pin_data]
 #[repr(C)]
 struct ArcInner<T: ?Sized> {
-    refcount: Opaque<bindings::refcount_t>,
+    strong: Opaque<bindings::refcount_t>,
+    weak: Opaque<bindings::refcount_t>,
     data: T,
 }
 
@@ -143,15 +155,18 @@ impl<T: ?Sized> core::ops::Receiver for Arc<T> {}
 // This is to allow coercion from `Arc<T>` to `Arc<U>` if `T` can be converted to the
 // dynamically-sized type (DST) `U`.
 impl<T: ?Sized + Unsize<U>, U: ?Sized> core::ops::CoerceUnsized<Arc<U>> for Arc<T> {}
+impl<T: ?Sized + Unsize<U>, U: ?Sized> core::ops::CoerceUnsized<Weak<U>> for Weak<T> {}
 
 // This is to allow `Arc<U>` to be dispatched on when `Arc<T>` can be coerced into `Arc<U>`.
 impl<T: ?Sized + Unsize<U>, U: ?Sized> core::ops::DispatchFromDyn<Arc<U>> for Arc<T> {}
+impl<T: ?Sized + Unsize<U>, U: ?Sized> core::ops::DispatchFromDyn<Weak<U>> for Weak<T> {}
 
 // SAFETY: It is safe to send `Arc<T>` to another thread when the underlying `T` is `Sync` because
 // it effectively means sharing `&T` (which is safe because `T` is `Sync`); additionally, it needs
 // `T` to be `Send` because any thread that has an `Arc<T>` may ultimately access `T` using a
 // mutable reference when the reference count reaches zero and `T` is dropped.
 unsafe impl<T: ?Sized + Sync + Send> Send for Arc<T> {}
+unsafe impl<T: ?Sized + Sync + Send> Send for Weak<T> {}
 
 // SAFETY: It is safe to send `&Arc<T>` to another thread when the underlying `T` is `Sync`
 // because it effectively means sharing `&T` (which is safe because `T` is `Sync`); additionally,
@@ -159,6 +174,7 @@ unsafe impl<T: ?Sized + Sync + Send> Send for Arc<T> {}
 // `Arc<T>` on that thread, so the thread may ultimately access `T` using a mutable reference when
 // the reference count reaches zero and `T` is dropped.
 unsafe impl<T: ?Sized + Sync + Send> Sync for Arc<T> {}
+unsafe impl<T: ?Sized + Sync + Send> Sync for Weak<T> {}
 
 impl<T> Arc<T> {
     /// Constructs a new reference counted instance of `T`.
@@ -166,7 +182,10 @@ impl<T> Arc<T> {
         // INVARIANT: The refcount is initialised to a non-zero value.
         let value = ArcInner {
             // SAFETY: There are no safety requirements for this FFI call.
-            refcount: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
+            strong: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
+            // Start the weak pointer count as 1 which is the weak pointer that's
+            // held by all the strong pointers (kinda), see std/rc.rs for more info.
+            weak: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
             data: contents,
         };
 
@@ -175,6 +194,51 @@ impl<T> Arc<T> {
         // SAFETY: We just created `inner` with a reference count of 1, which is owned by the new
         // `Arc` object.
         Ok(unsafe { Self::from_inner(Box::leak(inner).into()) })
+    }
+
+    /// Constructs a new `Arc<T>` while giving you a `Weak<T>` to the allocation,
+    /// to allow you to construct a `T` which holds a weak pointer to itself.
+    pub fn try_new_cyclic<F>(data_fn: F) -> Result<Self, AllocError>
+    where
+        F: FnOnce(&Weak<T>) -> T,
+    {
+        // Construct the inner in the "uninitialized" state with a single
+        // weak reference.
+        let inner = Box::try_new(ArcInner {
+            // SAFETY: There are no safety requirements for this FFI call.
+            strong: Opaque::new(unsafe { bindings::REFCOUNT_INIT(0) }),
+            weak: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
+            data: MaybeUninit::<T>::uninit(),
+        })?;
+        let uninit_ptr: NonNull<_> = Box::leak(inner).into();
+        let init_ptr: NonNull<ArcInner<T>> = uninit_ptr.cast();
+
+        let weak = Weak { ptr: init_ptr };
+
+        // It's important we don't give up ownership of the weak pointer, or
+        // else the memory might be freed by the time `data_fn` returns. If
+        // we really wanted to pass ownership, we could create an additional
+        // weak pointer for ourselves, but this would result in additional
+        // updates to the weak reference count which might not be necessary
+        // otherwise.
+        let data = data_fn(&weak);
+
+        // Now we can properly initialize the inner value and turn our weak
+        // reference into a strong reference.
+        let strong = unsafe {
+            let inner = init_ptr.as_ptr();
+            core::ptr::write(addr_of_mut!((*inner).data), data);
+
+            let refs = addr_of_mut!((*(*inner).strong.get()).refs);
+            let prev_value = unsafe { bindings::atomic_fetch_add_release(1, refs) };
+            debug_assert_eq!(prev_value, 0, "No prior strong references should exist");
+            Arc::from_inner(init_ptr)
+        };
+
+        // Strong references should collectively own a shared weak reference,
+        // so don't run the destructor for our old weak reference.
+        core::mem::forget(weak);
+        Ok(strong)
     }
 
     /// Use the given initializer to in-place initialize a `T`.
@@ -231,6 +295,41 @@ impl<T: ?Sized> Arc<T> {
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
         core::ptr::eq(this.ptr.as_ptr(), other.ptr.as_ptr())
     }
+
+    /// Creates a new [`Weak`] pointer.
+    pub fn downgrade(this: &Self) -> Weak<T> {
+        // INVARIANT: C `refcount_inc` saturates the refcount, so it cannot overflow to zero.
+        // SAFETY: By the type invariant, there is necessarily a reference to the object, so it is
+        // safe to increment the refcount.
+        unsafe { bindings::refcount_inc(this.ptr.as_ref().weak.get()) };
+        Weak { ptr: this.ptr }
+    }
+
+    /// Gets the number of strong (`Arc`) pointers.
+    pub fn strong_count(this: &Self) -> usize {
+        unsafe {
+            let refs = addr_of_mut!((*(this.ptr.as_ref().strong.get())).refs);
+            bindings::atomic_read_acquire(refs) as _
+        }
+    }
+
+    /// Gets the number of [`Weak`] pointers.
+    pub fn weak_count(this: &Self) -> usize {
+        unsafe {
+            let refs = addr_of_mut!((*(this.ptr.as_ref().weak.get())).refs);
+            let cnt = bindings::atomic_read_acquire(refs) as usize;
+            debug_assert_ne!(cnt, 0, "Strong references should own a shared weak reference");
+            cnt - 1
+        }
+    }
+
+    /// Returns a mutable reference into the given `Arc`,
+    /// without any check.
+    unsafe fn get_mut_unchecked(this: &mut Self) -> &mut T {
+        // We are careful to *not* create a reference covering the "count" fields, as
+        // this would alias with concurrent access to the reference counts (e.g. by `Weak`).
+        unsafe { &mut (*this.ptr.as_ptr()).data }
+    }
 }
 
 impl<T: 'static> ForeignOwnable for Arc<T> {
@@ -279,7 +378,7 @@ impl<T: ?Sized> Clone for Arc<T> {
         // INVARIANT: C `refcount_inc` saturates the refcount, so it cannot overflow to zero.
         // SAFETY: By the type invariant, there is necessarily a reference to the object, so it is
         // safe to increment the refcount.
-        unsafe { bindings::refcount_inc(self.ptr.as_ref().refcount.get()) };
+        unsafe { bindings::refcount_inc(self.ptr.as_ref().strong.get()) };
 
         // SAFETY: We just incremented the refcount. This increment is now owned by the new `Arc`.
         unsafe { Self::from_inner(self.ptr) }
@@ -292,18 +391,26 @@ impl<T: ?Sized> Drop for Arc<T> {
         // touch `refcount` after it's decremented to a non-zero value because another thread/CPU
         // may concurrently decrement it to zero and free it. It is ok to have a raw pointer to
         // freed/invalid memory as long as it is never dereferenced.
-        let refcount = unsafe { self.ptr.as_ref() }.refcount.get();
+        //let strong = unsafe { self.ptr.as_ref() }.strong.get();
 
         // INVARIANT: If the refcount reaches zero, there are no other instances of `Arc`, and
         // this instance is being dropped, so the broken invariant is not observable.
         // SAFETY: Also by the type invariant, we are allowed to decrement the refcount.
-        let is_zero = unsafe { bindings::refcount_dec_and_test(refcount) };
-        if is_zero {
-            // The count reached zero, we must free the memory.
-            //
-            // SAFETY: The pointer was initialised from the result of `Box::leak`.
-            unsafe { drop(Box::from_raw(self.ptr.as_ptr())) };
+        //let no_strong_ref = unsafe { bindings::refcount_dec_and_test(strong) };
+        let old = unsafe {
+            let refs = addr_of_mut!((*(*self.ptr.as_ptr()).strong.get()).refs);
+            bindings::atomic_fetch_dec_acquire(refs)
+        };
+        if old != 1 {
+            return;
         }
+
+        // Destroy the data at this time, even though we must not free the box
+        // allocation itself (there might still be weak pointers lying around).
+        unsafe { core::ptr::drop_in_place(Self::get_mut_unchecked(self)) };
+
+        // Decrement the weak ref collectively held by all strong references.
+        drop(Weak { ptr: self.ptr })
     }
 }
 
@@ -528,7 +635,8 @@ impl<T> UniqueArc<T> {
         // INVARIANT: The refcount is initialised to a non-zero value.
         let inner = Box::try_init::<AllocError>(try_init!(ArcInner {
             // SAFETY: There are no safety requirements for this FFI call.
-            refcount: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
+            strong: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
+            weak: Opaque::new(unsafe { bindings::REFCOUNT_INIT(1) }),
             data <- init::uninit::<T, AllocError>(),
         }? AllocError))?;
         Ok(UniqueArc {
@@ -612,6 +720,100 @@ impl<T: ?Sized> DerefMut for UniqueArc<T> {
     }
 }
 
+impl<T: ?Sized> Weak<T> {
+    /// Attempts to upgrade the `Weak` pointer to an [`Arc`], delaying
+    /// dropping of the inner value if successful.
+    ///
+    /// Returns [`None`] if the inner value has since been dropped.
+    pub fn upgrade(&self) -> Option<Arc<T>> {
+        // Increment strong refcount unless it is 0.
+        let success = unsafe { bindings::refcount_inc_not_zero(self.ptr.as_ref().strong.get()) };
+        if success {
+            Some(unsafe { Arc::from_inner(self.ptr) })
+        } else {
+            None
+        }
+    }
+
+    /// Gets the number of strong (`Arc`) pointers.
+    pub fn strong_count(&self) -> usize {
+        unsafe {
+            let refs = addr_of_mut!((*(self.ptr.as_ref().strong.get())).refs);
+            bindings::atomic_read_acquire(refs) as _
+        }
+    }
+
+    /// Gets an approximation of the number of `Weak` pointers.
+    ///
+    /// Due to implementation details, the returned value can be off by 1 in
+    /// either direction when other threads are manipulating any `Arc`s or
+    /// `Weak`s pointing to the same allocation.
+    pub fn weak_count(&self) -> usize {
+        let weak = unsafe {
+            let refs = addr_of_mut!((*(self.ptr.as_ref().weak.get())).refs);
+            bindings::atomic_read_acquire(refs) as usize
+        };
+        let strong = self.strong_count();
+        if strong == 0 {
+            0
+        } else {
+            // Since we observed that there was at least one strong pointer
+            // after reading the weak count, we know that the implicit weak
+            // reference (present whenever any strong references are alive)
+            // was still around when we observed the weak count, and can
+            // therefore safely subtract it.
+            weak - 1
+        }
+    }
+
+    /// Compare whether two [`Weak`] pointers reference the same underlying object.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        core::ptr::eq(
+            self.ptr.as_ptr() as *const (),
+            other.ptr.as_ptr() as *const (),
+        )
+    }
+}
+
+impl<T: ?Sized> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        // INVARIANT: C `refcount_inc` saturates the refcount, so it cannot overflow to zero.
+        // SAFETY: By the type invariant, there is necessarily a reference to the object, so it is
+        // safe to increment the refcount.
+        unsafe { bindings::refcount_inc(self.ptr.as_ref().weak.get()) };
+
+        // SAFETY: We just incremented the refcount. This increment is now owned by the new `Weak`.
+        unsafe { Weak { ptr: self.ptr } }
+    }
+}
+
+impl<T: ?Sized> Drop for Weak<T> {
+    fn drop(&mut self) {
+        // SAFETY: By the `Arc` invariant, there is necessarily a reference to the object. We cannot
+        // touch `refcount` after it's decremented to a non-zero value because another thread/CPU
+        // may concurrently decrement it to zero and free it. It is ok to have a raw pointer to
+        // freed/invalid memory as long as it is never dereferenced.
+        //let weak = unsafe { self.ptr.as_ref() }.weak.get();
+
+        // INVARIANT: If the refcount reaches zero, there are no other instances of `Arc`, and
+        // this instance is being dropped, so the broken invariant is not observable.
+        // SAFETY: Also by the type invariant, we are allowed to decrement the refcount.
+        //let no_weak_ref = unsafe { bindings::refcount_dec_and_test(weak) };
+        let old = unsafe {
+            let refs = addr_of_mut!((*(*self.ptr.as_ptr()).weak.get()).refs);
+            bindings::atomic_fetch_dec_acquire(refs)
+        };
+        if old != 1 {
+            return;
+        }
+
+        // Weak count reached zero, we must free the memory.
+        //
+        // The pointer was initialized from the result of `Box::leak`.
+        unsafe { drop(Box::from_raw(self.ptr.as_ptr())) };
+    }
+}
+
 impl<T: fmt::Display + ?Sized> fmt::Display for UniqueArc<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self.deref(), f)
@@ -633,5 +835,11 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for UniqueArc<T> {
 impl<T: fmt::Debug + ?Sized> fmt::Debug for Arc<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.deref(), f)
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for Weak<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(Weak)")
     }
 }

@@ -34,6 +34,8 @@
 #include <linux/scatterlist.h>
 #include <crypto/aead.h>
 #include <crypto/skcipher.h>
+#include <linux/highmem.h>
+#include <linux/atomic/atomic-instrumented.h>
 
 __noreturn void rust_helper_BUG(void)
 {
@@ -94,11 +96,29 @@ void rust_helper_refcount_inc(refcount_t *r)
 }
 EXPORT_SYMBOL_GPL(rust_helper_refcount_inc);
 
-bool rust_helper_refcount_dec_and_test(refcount_t *r)
+bool rust_helper_refcount_inc_not_zero(refcount_t *r)
 {
-	return refcount_dec_and_test(r);
+	return refcount_inc_not_zero(r);
 }
-EXPORT_SYMBOL_GPL(rust_helper_refcount_dec_and_test);
+EXPORT_SYMBOL_GPL(rust_helper_refcount_inc_not_zero);
+
+int rust_helper_atomic_fetch_dec_acquire(atomic_t *v)
+{
+	return atomic_fetch_dec_acquire(v);
+}
+EXPORT_SYMBOL_GPL(rust_helper_atomic_fetch_dec_acquire);
+
+int rust_helper_atomic_read_acquire(const atomic_t *v)
+{
+	return atomic_read_acquire(v);
+}
+EXPORT_SYMBOL_GPL(rust_helper_atomic_read_acquire);
+
+int rust_helper_atomic_fetch_add_release(int i, atomic_t *v)
+{
+	return atomic_fetch_add_release(i, v);
+}
+EXPORT_SYMBOL_GPL(rust_helper_atomic_fetch_add_release);
 
 __force void *rust_helper_ERR_PTR(long err)
 {
@@ -180,6 +200,36 @@ struct skcipher_request *rust_helper_skcipher_request_alloc(
 	return skcipher_request_alloc(tfm, gfp);
 }
 EXPORT_SYMBOL_GPL(rust_helper_skcipher_request_alloc);
+
+void rust_helper_bio_get(struct bio *bio)
+{
+	bio_get(bio);
+}
+EXPORT_SYMBOL_GPL(rust_helper_bio_get);
+
+struct page *rust_helper_virt_to_page(void *addr)
+{
+	return virt_to_page(addr);
+}
+EXPORT_SYMBOL_GPL(rust_helper_virt_to_page);
+
+void *rust_helper_page_to_virt(struct page *page)
+{
+	return page_to_virt(page);
+}
+EXPORT_SYMBOL_GPL(rust_helper_page_to_virt);
+
+void *rust_helper_kmap_local_page(struct page *page)
+{
+	return kmap_local_page(page);
+}
+EXPORT_SYMBOL_GPL(rust_helper_kmap_local_page);
+
+void rust_helper_kunmap_local(void *addr)
+{
+	kunmap_local(addr);
+}
+EXPORT_SYMBOL_GPL(rust_helper_kunmap_local);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can
